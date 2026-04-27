@@ -1,0 +1,44 @@
+[
+  {
+    "id": "mock-1",
+    "title": "Frontend React Developer",
+    "company": "Tech Sur SA",
+    "location": "CABA, Buenos Aires",
+    "modality": "Híbrido",
+    "salary": "ARS 2.200.000",
+    "postedDate": "2026-04-20",
+    "description": "Desarrollo de interfaces con React, TypeScript y testing.",
+    "url": "https://www.bumeran.com.ar/empleos/frontend-react-developer-mock-1.html",
+    "source": "Bumeran",
+    "scrapedAt": "2026-04-27T00:00:00.000Z",
+    "status": "active"
+  },
+  {
+    "id": "mock-2",
+    "title": "Backend Node.js Engineer",
+    "company": "Nube Productiva",
+    "location": "Rosario, Santa Fe",
+    "modality": "Remoto",
+    "salary": "A convenir",
+    "postedDate": "2026-04-18",
+    "description": "APIs REST y microservicios en Node.js con foco en escalabilidad.",
+    "url": "https://www.bumeran.com.ar/empleos/backend-node-mock-2.html",
+    "source": "Bumeran",
+    "scrapedAt": "2026-04-27T00:00:00.000Z",
+    "status": "active"
+  },
+  {
+    "id": "mock-3",
+    "title": "Analista Funcional IT",
+    "company": "Consultora Delta",
+    "location": "Córdoba, Córdoba",
+    "modality": "Presencial",
+    "salary": "ARS 1.800.000",
+    "postedDate": "2026-04-15",
+    "description": "Relevamiento funcional y coordinación entre negocio y equipos técnicos.",
+    "url": "https://www.bumeran.com.ar/empleos/analista-funcional-mock-3.html",
+    "source": "Bumeran",
+    "scrapedAt": "2026-04-27T00:00:00.000Z",
+    "status": "active"
+  }
+]
