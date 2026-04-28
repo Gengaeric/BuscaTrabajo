@@ -3,4 +3,4 @@
 keywords = ["Recursos Humanos", "HR"]
 location = "Buenos Aires"
 max_results = 25
-output_file = "data/offers_bumeran.csv"
+output_file = "data/offers.csv"
