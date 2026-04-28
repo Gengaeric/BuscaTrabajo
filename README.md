@@ -110,3 +110,58 @@ npm run build
 - Sin envío de datos personales.
 - Sin bypass de captcha.
 - Si aparece bloqueo/captcha: error explícito `requiere revisión técnica/manual`.
+
+---
+
+## Script Python (Paso 1 solicitado)
+
+Este repositorio también incluye un scraper independiente en Python para extraer ofertas públicas desde **Bumeran Argentina** y guardarlas en CSV.
+
+### Estructura adicional
+
+```txt
+BuscaTrabajo/
+  scraper.py
+  requirements.txt
+  data/
+    offers_bumeran.csv (se genera al correr)
+  logs/
+    scraper.log (se genera al correr)
+```
+
+### Cómo instalar
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # En Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python -m playwright install chromium
+```
+
+### Cómo correr
+
+```bash
+python scraper.py
+```
+
+### Qué hace
+
+- Abre Bumeran Argentina.
+- Ejecuta búsquedas públicas con keywords: `Recursos Humanos` y `HR`.
+- Filtra por ubicación: `Buenos Aires`.
+- Extrae (si están disponibles):
+  - título
+  - empresa
+  - ubicación
+  - link
+  - fecha de publicación
+- Limita resultados a un máximo de 25 ofertas.
+- Guarda resultados en `data/offers_bumeran.csv`.
+- Guarda logs en `logs/scraper.log`.
+- Si no encuentra elementos o hay errores puntuales, los registra y continúa sin romper la ejecución.
+
+### Cómo ver resultados
+
+- CSV: `data/offers_bumeran.csv`
+- Logs: `logs/scraper.log`
+
