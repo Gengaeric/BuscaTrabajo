@@ -1,4 +1,4 @@
-# BuscaTrabajo (Paso 1)
+# BuscaTrabajo (Paso 2)
 
 Dashboard web para buscar ofertas públicas en **Bumeran Argentina** con arquitectura preparada para futuras fuentes.
 
@@ -113,7 +113,7 @@ npm run build
 
 ---
 
-## Script Python (Paso 1 solicitado)
+## Script Python (Paso 2: base central de seguimiento)
 
 Este repositorio también incluye un scraper independiente en Python para extraer ofertas públicas desde **Bumeran Argentina** y guardarlas en CSV.
 
@@ -124,7 +124,8 @@ BuscaTrabajo/
   scraper.py
   requirements.txt
   data/
-    offers_bumeran.csv (se genera al correr)
+    offers.csv (base central, se genera al correr)
+  storage.py
   logs/
     scraper.log (se genera al correr)
 ```
@@ -144,24 +145,54 @@ python -m playwright install chromium
 python scraper.py
 ```
 
+
+### Cómo funciona la base central (`storage.py`)
+
+El módulo `storage.py` centraliza el almacenamiento y seguimiento de ofertas en CSV.
+
+- `load_offers()`: carga `data/offers.csv`, normaliza campos y elimina duplicados por `id`.
+- `save_offers()`: persiste la base central garantizando el esquema único de columnas.
+- `upsert_offer()`: agrega ofertas nuevas o actualiza datos de scraping si ya existían sin perder seguimiento.
+- `update_offer_status()`: permite actualizar estado y notas de una oferta por `id`.
+
+Cada oferta se normaliza con estos campos:
+
+- `id`
+- `title`
+- `company`
+- `location`
+- `link`
+- `source`
+- `scraped_at`
+- `status`
+- `score`
+- `category`
+- `action_required`
+- `notes`
+- `manual_required`
+- `manual_reason`
+
+`id` se genera automáticamente usando hash SHA-256 del `link`. Esto evita duplicados y permite conservar el seguimiento manual (`status`, `notes` y demás campos de tracking) cuando una oferta vuelve a aparecer en nuevos scrapes.
+
 ### Qué hace
 
 - Abre Bumeran Argentina.
 - Ejecuta búsquedas públicas con keywords: `Recursos Humanos` y `HR`.
 - Filtra por ubicación: `Buenos Aires`.
-- Extrae (si están disponibles):
-  - título
-  - empresa
-  - ubicación
+- Extrae y normaliza (si están disponibles):
+  - title
+  - company
+  - location
   - link
-  - fecha de publicación
+  - source
+  - scraped_at
 - Limita resultados a un máximo de 25 ofertas.
-- Guarda resultados en `data/offers_bumeran.csv`.
+- Guarda y actualiza resultados en `data/offers.csv` (base central).
 - Guarda logs en `logs/scraper.log`.
 - Si no encuentra elementos o hay errores puntuales, los registra y continúa sin romper la ejecución.
 
 ### Cómo ver resultados
 
-- CSV: `data/offers_bumeran.csv`
+- CSV: `data/offers.csv`
 - Logs: `logs/scraper.log`
 
