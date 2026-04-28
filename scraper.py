@@ -380,12 +380,20 @@ def main() -> None:
     logger = setup_logging()
     indeed_logger = setup_indeed_logger()
     logger.info("Inicio de scraping de ofertas públicas de Bumeran")
+    logger.info(
+        "Configuración compartida entre fuentes: keywords=%s | location=%s | max_results=%s | output=%s",
+        config.keywords,
+        config.location,
+        config.max_results,
+        config.output_file,
+    )
 
     offers_db = load_offers()
     logger.info("Base central cargada: %s ofertas", len(offers_db))
 
     scraped_offers: List[Dict[str, str]] = []
     bumeran_requires_manual_review = False
+    bumeran_had_error = False
 
     with sync_playwright() as p:
         browser = None
@@ -394,30 +402,40 @@ def main() -> None:
             context = browser.new_context()
             page = context.new_page()
 
-            for keyword in config.keywords:
-                if len(scraped_offers) >= config.max_results:
-                    break
+            try:
+                for keyword in config.keywords:
+                    if len(scraped_offers) >= config.max_results:
+                        break
 
-                offers, blocked = collect_for_keyword(page, keyword, config.location, logger)
-                if blocked:
-                    bumeran_requires_manual_review = True
-                scraped_offers.extend(offers)
-                if len(scraped_offers) > config.max_results:
-                    scraped_offers = scraped_offers[: config.max_results]
+                    offers, blocked = collect_for_keyword(page, keyword, config.location, logger)
+                    if blocked:
+                        bumeran_requires_manual_review = True
+                    scraped_offers.extend(offers)
+                    if len(scraped_offers) > config.max_results:
+                        scraped_offers = scraped_offers[: config.max_results]
+            except Exception as exc:
+                bumeran_had_error = True
+                logger.exception("Error durante flujo de Bumeran: %s", exc)
 
-            if bumeran_requires_manual_review and len(scraped_offers) < config.max_results:
+            if bumeran_requires_manual_review:
                 logger.warning(
                     "Bumeran requiere revisión manual por bloqueo anti-automatización. "
-                    "Se ejecuta fallback automático en Indeed Argentina."
+                    "Se ejecuta Indeed Argentina de todos modos."
                 )
-                indeed_offers = collect_indeed_offers(
-                    page=page,
-                    keywords=config.keywords,
-                    location=config.location,
-                    max_results=max(0, config.max_results - len(scraped_offers)),
-                    logger=indeed_logger,
+            if bumeran_had_error:
+                logger.warning(
+                    "Bumeran falló durante la ejecución. Se ejecuta Indeed Argentina de todos modos."
                 )
-                scraped_offers.extend(indeed_offers)
+
+            logger.info("Inicio de flujo de Indeed Argentina (post-Bumeran)")
+            indeed_offers = collect_indeed_offers(
+                page=page,
+                keywords=config.keywords,
+                location=config.location,
+                max_results=max(0, config.max_results - len(scraped_offers)),
+                logger=indeed_logger,
+            )
+            scraped_offers.extend(indeed_offers)
         except Exception as exc:
             logger.exception("Error general durante el scraping: %s", exc)
         finally:
