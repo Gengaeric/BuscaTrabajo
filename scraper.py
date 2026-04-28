@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import config
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -45,9 +45,83 @@ def normalize_whitespace(value: Optional[str]) -> str:
 
 
 def build_search_url(keyword: str, location: str) -> str:
+    query = urlencode(
+        {
+            "palabra": keyword,
+            # Bumeran usa location en la búsqueda web actual.
+            "location": location,
+        },
+        quote_via=quote_plus,
+    )
+    return f"{BASE_URL}/empleos-busqueda.html?{query}"
+
+
+def build_search_url_fallbacks(keyword: str, location: str) -> List[str]:
+    """Devuelve variantes por si Bumeran cambia parámetros de búsqueda."""
     encoded_keyword = quote_plus(keyword)
     encoded_location = quote_plus(location)
-    return f"{BASE_URL}/empleos-busqueda.html?palabra={encoded_keyword}&ubicacion={encoded_location}"
+    return [
+        build_search_url(keyword, location),
+        f"{BASE_URL}/empleos-busqueda.html?palabra={encoded_keyword}&ubicacion={encoded_location}",
+        f"{BASE_URL}/empleos.html?palabra={encoded_keyword}&location={encoded_location}",
+    ]
+
+
+def classify_debug_state_from_html(html: str) -> str:
+    content = html.lower()
+    checks = {
+        "captcha": [
+            "captcha",
+            "recaptcha",
+            "hcaptcha",
+            "no soy un robot",
+            "i am human",
+            "are you human",
+            "security challenge",
+        ],
+        "bloqueo_anti_bot": [
+            "access denied",
+            "forbidden",
+            "request blocked",
+            "bot detection",
+            "cloudflare",
+            "akamai",
+        ],
+        "error_pagina": [
+            "500",
+            "502",
+            "503",
+            "504",
+            "service unavailable",
+            "something went wrong",
+            "ocurrió un error",
+            "página no encontrada",
+        ],
+        "sin_resultados": [
+            "no hay ofertas",
+            "no encontramos",
+            "sin resultados",
+            "no hay resultados",
+        ],
+    }
+    for label, patterns in checks.items():
+        if any(pattern in content for pattern in patterns):
+            return label
+    if "__next" in content and "application/json" in content and "script" in content:
+        return "estructura_js_o_selectores_desactualizados"
+    return "desconocido"
+
+
+def analyze_debug_artifacts(logger: logging.Logger) -> str:
+    """Analiza el HTML de debug ya guardado para detectar causa probable."""
+    if not DEBUG_HTML_PATH.exists():
+        logger.warning("No existe HTML de debug para analizar: %s", DEBUG_HTML_PATH)
+        return "sin_html_debug"
+
+    html = DEBUG_HTML_PATH.read_text(encoding="utf-8", errors="ignore")
+    diagnosis = classify_debug_state_from_html(html)
+    logger.info("Diagnóstico automático de Bumeran (desde debug HTML): %s", diagnosis)
+    return diagnosis
 
 
 def safe_text(item, selectors: List[str], logger: logging.Logger, field_name: str) -> str:
@@ -183,29 +257,62 @@ def extract_offer(item, logger: logging.Logger) -> Dict[str, str]:
 def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logger) -> List[Dict[str, str]]:
     """Recolecta ofertas para una keyword hasta el límite de configuración."""
     offers: List[Dict[str, str]] = []
-    search_url = build_search_url(keyword, location)
-    logger.info("Buscando keyword '%s' en URL: %s", keyword, search_url)
+    search_urls = build_search_url_fallbacks(keyword, location)
+    logger.info("Buscando keyword '%s' (URLs candidatas: %s)", keyword, " | ".join(search_urls))
 
-    try:
-        page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(2000)
-    except PlaywrightTimeoutError:
-        logger.error("Timeout cargando la búsqueda para keyword '%s'", keyword)
-        return offers
-    except Exception as exc:
-        logger.error("Error navegando búsqueda para keyword '%s': %s", keyword, exc)
+    last_navigation_error = None
+    for search_url in search_urls:
+        try:
+            page.goto(search_url, wait_until="domcontentloaded", timeout=35000)
+            page.wait_for_load_state("networkidle", timeout=10000)
+            page.wait_for_timeout(1200)
+            logger.info("Búsqueda cargada para keyword '%s' con URL: %s", keyword, search_url)
+            break
+        except PlaywrightTimeoutError as exc:
+            last_navigation_error = exc
+            logger.warning("Timeout con URL '%s' para keyword '%s'. Probaré variante.", search_url, keyword)
+        except Exception as exc:
+            last_navigation_error = exc
+            logger.warning("Error de navegación con URL '%s': %s", search_url, exc)
+    else:
+        logger.error("No se pudo navegar ninguna URL para keyword '%s': %s", keyword, last_navigation_error)
         return offers
 
     card_selectors = [
         "[data-qa='job-card']",
+        "[data-qa='aviso-item']",
         "[data-testid='job-card']",
+        "[data-testid='job-item']",
         "[data-test='job-card']",
+        "[data-qa='search-results-list'] article",
         "article[data-qa*='job']",
         "article[data-testid*='job']",
         "article:has(a[href*='/empleos/'])",
         "li:has(a[href*='/empleos/'])",
         "div:has(a[href*='/empleos/'])",
     ]
+
+    no_results_or_error_selectors = [
+        "text=/captcha|robot|verificación|access denied|forbidden|bloqueado/i",
+        "text=/no encontramos|sin resultados|no hay resultados/i",
+        "text=/ocurrió un error|algo salió mal|service unavailable/i",
+    ]
+    for marker in no_results_or_error_selectors:
+        try:
+            if page.locator(marker).first.is_visible(timeout=1200):
+                logger.warning("Se detectó marcador de error/bloqueo/no-resultados: %s", marker)
+                persist_debug_artifacts(page, logger, keyword)
+                diagnosis = analyze_debug_artifacts(logger)
+                if diagnosis in {"captcha", "bloqueo_anti_bot"}:
+                    logger.error(
+                        "Bumeran bloquea o desafía automatización para keyword '%s' (diagnóstico=%s). "
+                        "Requiere revisión manual.",
+                        keyword,
+                        diagnosis,
+                    )
+                return offers
+        except Exception:
+            pass
 
     cards = None
     for selector in card_selectors:
@@ -223,6 +330,13 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
     if cards is None:
         logger.error("No se encontraron contenedores de ofertas para keyword '%s'", keyword)
         persist_debug_artifacts(page, logger, keyword)
+        diagnosis = analyze_debug_artifacts(logger)
+        if diagnosis in {"captcha", "bloqueo_anti_bot"}:
+            logger.error(
+                "Bumeran bloquea Playwright para keyword '%s' (diagnóstico=%s). Requiere revisión manual.",
+                keyword,
+                diagnosis,
+            )
         return offers
 
     try:
@@ -233,6 +347,7 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
     if total_cards == 0:
         logger.error("La lista de ofertas está vacía para keyword '%s'", keyword)
         persist_debug_artifacts(page, logger, keyword)
+        analyze_debug_artifacts(logger)
         return offers
 
     for idx in range(total_cards):
@@ -253,6 +368,7 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
     if not offers:
         logger.warning("No se extrajeron ofertas válidas para keyword '%s'", keyword)
         persist_debug_artifacts(page, logger, keyword)
+        analyze_debug_artifacts(logger)
     return offers
 
 
