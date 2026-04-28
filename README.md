@@ -1,4 +1,4 @@
-# BuscaTrabajo (Paso 1)
+# BuscaTrabajo (Paso 2)
 
 Dashboard web para buscar ofertas públicas en **Bumeran Argentina** con arquitectura preparada para futuras fuentes.
 
@@ -113,7 +113,7 @@ npm run build
 
 ---
 
-## Script Python (Paso 1 solicitado)
+## Script Python (Paso 2: base central de seguimiento)
 
 Este repositorio también incluye un scraper independiente en Python para extraer ofertas públicas desde **Bumeran Argentina** y guardarlas en CSV.
 
@@ -124,7 +124,8 @@ BuscaTrabajo/
   scraper.py
   requirements.txt
   data/
-    offers_bumeran.csv (se genera al correr)
+    offers.csv (base central, se genera al correr)
+  storage.py (módulo de persistencia y seguimiento)
   logs/
     scraper.log (se genera al correr)
 ```
@@ -156,12 +157,45 @@ python scraper.py
   - link
   - fecha de publicación
 - Limita resultados a un máximo de 25 ofertas.
-- Guarda resultados en `data/offers_bumeran.csv`.
+- Usa `storage.py` para cargar, insertar/actualizar (`upsert`) y guardar ofertas normalizadas.
+- Genera `id` único por oferta (hash SHA-256 del `link`).
+- Evita duplicados por `id`.
+- Si una oferta ya existe, conserva campos de seguimiento (`status`, `notes`, `score`, `category`, `action_required`, `manual_required`, `manual_reason`).
+- Guarda resultados en `data/offers.csv`.
 - Guarda logs en `logs/scraper.log`.
 - Si no encuentra elementos o hay errores puntuales, los registra y continúa sin romper la ejecución.
 
 ### Cómo ver resultados
 
-- CSV: `data/offers_bumeran.csv`
+- CSV: `data/offers.csv`
 - Logs: `logs/scraper.log`
 
+
+
+### Esquema de la base central (`data/offers.csv`)
+
+Cada fila se guarda con este esquema extensible:
+
+- `id`
+- `title`
+- `company`
+- `location`
+- `link`
+- `source`
+- `scraped_at`
+- `status`
+- `score`
+- `category`
+- `action_required`
+- `notes`
+- `manual_required`
+- `manual_reason`
+
+### Flujo al ejecutar `python scraper.py`
+
+1. Carga ofertas existentes desde `data/offers.csv`.
+2. Scrapea nuevas ofertas públicas desde Bumeran.
+3. Para cada oferta, calcula `id` desde `link` y hace `upsert`:
+   - si no existe, la agrega,
+   - si existe, actualiza datos de scraping y preserva seguimiento manual.
+4. Guarda todo nuevamente en la base central CSV sin duplicados.
