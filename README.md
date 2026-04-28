@@ -196,3 +196,58 @@ Cada oferta se normaliza con estos campos:
 - CSV: `data/offers.csv`
 - Logs: `logs/scraper.log`
 
+
+---
+
+## Paso 3: Evaluación automática por reglas
+
+Se agregó un evaluador local (sin IA externa ni APIs pagas) para puntuar ofertas guardadas en `data/offers.csv`.
+
+### Archivos nuevos
+
+- `criteria.py`: criterios editables de evaluación.
+- `evaluator.py`: motor de scoring por reglas + categorización + acciones.
+- `evaluate_offers.py`: script ejecutable para correr la evaluación.
+
+### Criterios editables (`criteria.py`)
+
+Podés ajustar estos campos:
+
+- `desired_keywords`
+- `secondary_keywords`
+- `forbidden_keywords`
+- `desired_locations`
+- `desired_modalities`
+- `minimum_salary`
+- `desired_seniority`
+- `flexible_criteria`
+
+`flexible_criteria` incluye flags para tolerar faltantes (`allow_unknown_location`, `allow_unknown_modality`, `allow_missing_salary`) y pesos (`weights`) para ajustar el score sin tocar la lógica.
+
+### Cómo correr la evaluación
+
+```bash
+python evaluate_offers.py
+```
+
+### Qué actualiza en `data/offers.csv`
+
+Por cada oferta:
+
+- calcula `score` (0–100)
+- asigna `category`:
+  - `ideal` (80–100)
+  - `posible` (60–79)
+  - `dudosa` (40–59)
+  - `descartada` (0–39)
+- asigna `action_required`:
+  - `ideal` → `lista_para_revisar`
+  - `posible` → `revisar`
+  - `dudosa` → `pendiente_manual`
+  - `descartada` → `descartar`
+- actualiza `status = evaluada`
+- completa `notes` automáticas solo si la oferta no tiene notas previas (no pisa notas manuales).
+
+### Manejo de errores
+
+Si una oferta falla durante la evaluación, se registra el error en logs y el proceso continúa con las demás ofertas.
