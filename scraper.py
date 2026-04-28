@@ -9,6 +9,7 @@ import config
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
+from scrapers.indeed_scraper import collect_indeed_offers, setup_indeed_logger
 from storage import load_offers, save_offers, upsert_offer
 
 BASE_URL = "https://www.bumeran.com.ar"
@@ -254,9 +255,10 @@ def extract_offer(item, logger: logging.Logger) -> Dict[str, str]:
     }
 
 
-def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logger) -> List[Dict[str, str]]:
+def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logger) -> tuple[List[Dict[str, str]], bool]:
     """Recolecta ofertas para una keyword hasta el límite de configuración."""
     offers: List[Dict[str, str]] = []
+    requires_manual_review = False
     search_urls = build_search_url_fallbacks(keyword, location)
     logger.info("Buscando keyword '%s' (URLs candidatas: %s)", keyword, " | ".join(search_urls))
 
@@ -276,7 +278,7 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
             logger.warning("Error de navegación con URL '%s': %s", search_url, exc)
     else:
         logger.error("No se pudo navegar ninguna URL para keyword '%s': %s", keyword, last_navigation_error)
-        return offers
+        return offers, requires_manual_review
 
     card_selectors = [
         "[data-qa='job-card']",
@@ -304,13 +306,14 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
                 persist_debug_artifacts(page, logger, keyword)
                 diagnosis = analyze_debug_artifacts(logger)
                 if diagnosis in {"captcha", "bloqueo_anti_bot"}:
+                    requires_manual_review = True
                     logger.error(
                         "Bumeran bloquea o desafía automatización para keyword '%s' (diagnóstico=%s). "
                         "Requiere revisión manual.",
                         keyword,
                         diagnosis,
                     )
-                return offers
+                return offers, requires_manual_review
         except Exception:
             pass
 
@@ -332,12 +335,13 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
         persist_debug_artifacts(page, logger, keyword)
         diagnosis = analyze_debug_artifacts(logger)
         if diagnosis in {"captcha", "bloqueo_anti_bot"}:
+            requires_manual_review = True
             logger.error(
                 "Bumeran bloquea Playwright para keyword '%s' (diagnóstico=%s). Requiere revisión manual.",
                 keyword,
                 diagnosis,
             )
-        return offers
+        return offers, requires_manual_review
 
     try:
         total_cards = cards.count()
@@ -348,7 +352,7 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
         logger.error("La lista de ofertas está vacía para keyword '%s'", keyword)
         persist_debug_artifacts(page, logger, keyword)
         analyze_debug_artifacts(logger)
-        return offers
+        return offers, requires_manual_review
 
     for idx in range(total_cards):
         if len(offers) >= config.max_results:
@@ -369,17 +373,19 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
         logger.warning("No se extrajeron ofertas válidas para keyword '%s'", keyword)
         persist_debug_artifacts(page, logger, keyword)
         analyze_debug_artifacts(logger)
-    return offers
+    return offers, requires_manual_review
 
 
 def main() -> None:
     logger = setup_logging()
+    indeed_logger = setup_indeed_logger()
     logger.info("Inicio de scraping de ofertas públicas de Bumeran")
 
     offers_db = load_offers()
     logger.info("Base central cargada: %s ofertas", len(offers_db))
 
     scraped_offers: List[Dict[str, str]] = []
+    bumeran_requires_manual_review = False
 
     with sync_playwright() as p:
         browser = None
@@ -392,10 +398,26 @@ def main() -> None:
                 if len(scraped_offers) >= config.max_results:
                     break
 
-                offers = collect_for_keyword(page, keyword, config.location, logger)
+                offers, blocked = collect_for_keyword(page, keyword, config.location, logger)
+                if blocked:
+                    bumeran_requires_manual_review = True
                 scraped_offers.extend(offers)
                 if len(scraped_offers) > config.max_results:
                     scraped_offers = scraped_offers[: config.max_results]
+
+            if bumeran_requires_manual_review and len(scraped_offers) < config.max_results:
+                logger.warning(
+                    "Bumeran requiere revisión manual por bloqueo anti-automatización. "
+                    "Se ejecuta fallback automático en Indeed Argentina."
+                )
+                indeed_offers = collect_indeed_offers(
+                    page=page,
+                    keywords=config.keywords,
+                    location=config.location,
+                    max_results=max(0, config.max_results - len(scraped_offers)),
+                    logger=indeed_logger,
+                )
+                scraped_offers.extend(indeed_offers)
         except Exception as exc:
             logger.exception("Error general durante el scraping: %s", exc)
         finally:
