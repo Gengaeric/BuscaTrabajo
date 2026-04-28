@@ -13,6 +13,8 @@ from storage import load_offers, save_offers, upsert_offer
 
 BASE_URL = "https://www.bumeran.com.ar"
 LOG_PATH = Path("logs/scraper.log")
+NO_RESULTS_SCREENSHOT_PATH = Path("logs/bumeran_no_results.png")
+DEBUG_HTML_PATH = Path("logs/bumeran_debug.html")
 UNAVAILABLE = "no disponible"
 
 
@@ -82,14 +84,90 @@ def safe_href(item, selectors: List[str], logger: logging.Logger) -> str:
     return UNAVAILABLE
 
 
+def persist_debug_artifacts(page, logger: logging.Logger, keyword: str) -> None:
+    """Guarda screenshot + HTML cuando no se encuentran ofertas."""
+    NO_RESULTS_SCREENSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        page.screenshot(path=str(NO_RESULTS_SCREENSHOT_PATH), full_page=True)
+        logger.info(
+            "Screenshot de debug guardado para keyword '%s': %s",
+            keyword,
+            NO_RESULTS_SCREENSHOT_PATH,
+        )
+    except Exception as exc:
+        logger.error("No se pudo guardar screenshot de debug para '%s': %s", keyword, exc)
+
+    try:
+        html = page.content()
+        DEBUG_HTML_PATH.write_text(html, encoding="utf-8")
+        logger.info("HTML de debug guardado para keyword '%s': %s", keyword, DEBUG_HTML_PATH)
+    except Exception as exc:
+        logger.error("No se pudo guardar HTML de debug para '%s': %s", keyword, exc)
+
+
 def extract_offer(item, logger: logging.Logger) -> Dict[str, str]:
     """Mapea una oferta de Bumeran al esquema central de almacenamiento."""
     timestamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     return {
-        "title": safe_text(item, ["h2", "h3", "a[data-test='job-title']", "[class*='title']"], logger, "title"),
-        "company": safe_text(item, ["[data-test='company-name']", "[class*='company']", "span"], logger, "company"),
-        "location": safe_text(item, ["[data-test='job-location']", "[class*='location']"], logger, "location"),
-        "link": safe_href(item, ["a[data-test='job-title']", "h2 a", "h3 a", "a"], logger),
+        "title": safe_text(
+            item,
+            [
+                "[data-qa='job-title']",
+                "[data-testid='job-title']",
+                "a[data-test='job-title']",
+                "h2 a",
+                "h3 a",
+                "h2",
+                "h3",
+                "a[href*='/empleos/']",
+                "[class*='title']",
+                "[class*='puesto']",
+            ],
+            logger,
+            "title",
+        ),
+        "company": safe_text(
+            item,
+            [
+                "[data-qa='job-company']",
+                "[data-qa='company-name']",
+                "[data-testid='job-company']",
+                "[data-test='company-name']",
+                "[class*='company']",
+                "[class*='empresa']",
+            ],
+            logger,
+            "company",
+        ),
+        "location": safe_text(
+            item,
+            [
+                "[data-qa='job-location']",
+                "[data-qa='job-city']",
+                "[data-testid='job-location']",
+                "[data-test='job-location']",
+                "[class*='location']",
+                "[class*='ubicacion']",
+                "[class*='city']",
+            ],
+            logger,
+            "location",
+        ),
+        "link": safe_href(
+            item,
+            [
+                "a[data-qa='job-title']",
+                "a[data-testid='job-title']",
+                "a[data-test='job-title']",
+                "h2 a",
+                "h3 a",
+                "a[href*='/empleos/']",
+                "a[href*='.html']",
+                "a",
+            ],
+            logger,
+        ),
         "source": "Bumeran",
         "scraped_at": timestamp,
         "status": "new",
@@ -119,10 +197,14 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
         return offers
 
     card_selectors = [
-        "article",
+        "[data-qa='job-card']",
+        "[data-testid='job-card']",
         "[data-test='job-card']",
-        "[class*='job']",
-        "[class*='offer']",
+        "article[data-qa*='job']",
+        "article[data-testid*='job']",
+        "article:has(a[href*='/empleos/'])",
+        "li:has(a[href*='/empleos/'])",
+        "div:has(a[href*='/empleos/'])",
     ]
 
     cards = None
@@ -140,6 +222,7 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
 
     if cards is None:
         logger.error("No se encontraron contenedores de ofertas para keyword '%s'", keyword)
+        persist_debug_artifacts(page, logger, keyword)
         return offers
 
     try:
@@ -149,6 +232,7 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
 
     if total_cards == 0:
         logger.error("La lista de ofertas está vacía para keyword '%s'", keyword)
+        persist_debug_artifacts(page, logger, keyword)
         return offers
 
     for idx in range(total_cards):
@@ -166,6 +250,9 @@ def collect_for_keyword(page, keyword: str, location: str, logger: logging.Logge
             logger.error("Error procesando oferta idx=%s keyword='%s': %s", idx, keyword, exc)
 
     logger.info("Keyword '%s': %s ofertas recolectadas", keyword, len(offers))
+    if not offers:
+        logger.warning("No se extrajeron ofertas válidas para keyword '%s'", keyword)
+        persist_debug_artifacts(page, logger, keyword)
     return offers
 
 
@@ -181,7 +268,7 @@ def main() -> None:
     with sync_playwright() as p:
         browser = None
         try:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context()
             page = context.new_page()
 
